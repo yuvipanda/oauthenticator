@@ -70,7 +70,8 @@ class MWOAuthHandler(BaseHandler):
 
         identity = handshaker.identify(access_token)
         if identity and 'username' in identity:
-            user = self.user_from_username(identity['username'])
+            username = identity['username'].replace(' ', '_')
+            user = self.user_from_username(username)
             self.set_login_cookie(user)
             self.redirect(url_path_join(self.hub.server.base_url, 'home'))
         else:
