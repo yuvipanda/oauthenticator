@@ -15,8 +15,18 @@ from jupyterhub.auth import Authenticator
 from jupyterhub.utils import url_path_join
 
 from mwoauth import ConsumerToken, Handshaker
+from mwoauth.tokens import RequestToken
 
 from IPython.utils.traitlets import Unicode
+
+
+def jsonify(request_token):
+    return json.dumps([request_token.key.decode('utf-8'), request_token.secret.decode('utf-8')])
+
+
+def dejsonify(js):
+    key, secret = json.loads(js.decode('utf-8'))
+    return RequestToken(b(key), b(secret))
 
 
 class MWLoginHandler(BaseHandler):
@@ -32,7 +42,7 @@ class MWLoginHandler(BaseHandler):
 
         redirect, request_token = handshaker.initiate()
 
-        self.set_secure_cookie('mw_oauth_request_token', json.dumps(request_token))
+        self.set_secure_cookie('mw_oauth_request_token', jsonify(request_token))
         self.log.info('oauth redirect: %r', redirect)
 
         self.redirect(redirect)
@@ -49,7 +59,7 @@ class MWOAuthHandler(BaseHandler):
         handshaker = Handshaker(
             self.authenticator.mw_index_url, consumer_token
         )
-        request_token = json.loads(self.get_secure_cookie('mw_oauth_request_token'))
+        request_token = dejsonify(self.get_secure_cookie('mw_oauth_request_token'))
         access_token = handshaker.complete(request_token, self.request.query)
 
         identity = handshaker.identify(access_token)
