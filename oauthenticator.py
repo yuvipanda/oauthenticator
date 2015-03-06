@@ -5,55 +5,56 @@ Most of the code c/o Kyle Kelley (@rgbkrk)
 """
 
 
-import json
 import os
+import json
 
-from tornado.auth import OAuth2Mixin
 from tornado import gen, web
 
-from tornado.httputil import url_concat
-from tornado.httpclient import HTTPRequest, AsyncHTTPClient
-
 from jupyterhub.handlers import BaseHandler
-from jupyterhub.auth import Authenticator, LocalAuthenticator
+from jupyterhub.auth import Authenticator
 from jupyterhub.utils import url_path_join
+
+from mwoauth import ConsumerToken, Handshaker
 
 from IPython.utils.traitlets import Unicode
 
 
-class GitHubMixin(OAuth2Mixin):
-    _OAUTH_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
-    _OAUTH_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
-
-
-class GitHubLoginHandler(BaseHandler, GitHubMixin):
+class MWLoginHandler(BaseHandler):
     def get(self):
-        guess_uri = '{proto}://{host}{path}'.format(
-            proto=self.request.protocol,
-            host=self.request.host,
-            path=url_path_join(
-                self.hub.server.base_url,
-                'oauth_callback'
-            )
+        consumer_token = ConsumerToken(
+            self.authenticator.mw_consumer_key,
+            self.authenticator.mw_consumer_secret
         )
 
-        redirect_uri = self.authenticator.oauth_callback_url or guess_uri
-        self.log.info('oauth redirect: %r', redirect_uri)
+        handshaker = Handshaker(
+            self.authenticator.mw_index_url, consumer_token
+        )
 
-        self.authorize_redirect(
-            redirect_uri=redirect_uri,
-            client_id=self.authenticator.github_client_id,
-            scope=[],
-            response_type='code')
+        redirect, request_token = handshaker.initiate()
+
+        self.set_secure_cookie('mw_oauth_request_token', json.dumps(request_token))
+        self.log.info('oauth redirect: %r', redirect)
+
+        self.redirect(redirect)
 
 
-class GitHubOAuthHandler(BaseHandler):
+class MWOAuthHandler(BaseHandler):
     @gen.coroutine
     def get(self):
-        # TODO: Check if state argument needs to be checked
-        username = yield self.authenticator.authenticate(self)
-        if username:
-            user = self.user_from_username(username)
+        consumer_token = ConsumerToken(
+            self.authenticator.mw_consumer_key,
+            self.authenticator.mw_consumer_secret
+        )
+
+        handshaker = Handshaker(
+            self.authenticator.mw_index_url, consumer_token
+        )
+        request_token = json.loads(self.get_secure_cookie('mw_oauth_request_token'))
+        access_token = handshaker.complete(request_token, self.request.query)
+
+        identity = handshaker.identify(access_token)
+        if identity and 'username' in identity:
+            user = self.user_from_username(identity['username'])
             self.set_login_cookie(user)
             self.redirect(url_path_join(self.hub.server.base_url, 'home'))
         else:
@@ -61,75 +62,20 @@ class GitHubOAuthHandler(BaseHandler):
             raise web.HTTPError(403)
 
 
-class GitHubOAuthenticator(Authenticator):
-
-    oauth_callback_url = Unicode('', config=True)
-    github_client_id = Unicode(os.environ.get('GITHUB_CLIENT_ID', ''),
-                               config=True)
-    github_client_secret = Unicode(os.environ.get('GITHUB_CLIENT_SECRET', ''),
-                                   config=True)
+class MWOAuthenticator(Authenticator):
+    mw_consumer_key = Unicode(os.environ.get('MW_CONSUMER_KEY', ''),
+                              config=True)
+    mw_consumer_secret = Unicode(os.environ.get('MW_CONSUMER_SECRET', ''),
+                                 config=True)
+    mw_index_url = Unicode(
+        os.environ.get('MW_INDEX_URL', 'https://meta.wikimedia.org/w/index.php'),
+        config=True)
 
     def login_url(self, base_url):
         return url_path_join(base_url, 'oauth_login')
 
     def get_handlers(self, app):
         return [
-            (r'/oauth_login', GitHubLoginHandler),
-            (r'/oauth_callback', GitHubOAuthHandler),
+            (r'/oauth_login', MWLoginHandler),
+            (r'/oauth_callback', MWOAuthHandler),
         ]
-
-    @gen.coroutine
-    def authenticate(self, handler):
-        code = handler.get_argument("code", False)
-        if not code:
-            raise web.HTTPError(400, "oauth callback made without a token")
-        # TODO: Configure the curl_httpclient for tornado
-        http_client = AsyncHTTPClient()
-
-        # Exchange the OAuth code for a GitHub Access Token
-        #
-        # See: https://developer.github.com/v3/oauth/
-
-        # GitHub specifies a POST request yet requires URL parameters
-        params = dict(
-            client_id=self.github_client_id,
-            client_secret=self.github_client_secret,
-            code=code
-        )
-
-        url = url_concat("https://github.com/login/oauth/access_token",
-                         params)
-
-        req = HTTPRequest(url,
-                          method="POST",
-                          headers={"Accept": "application/json"},
-                          body=''  # Body is required for a POST...
-                          )
-
-        resp = yield http_client.fetch(req)
-        resp_json = json.loads(resp.body.decode('utf8', 'replace'))
-
-        access_token = resp_json['access_token']
-
-        # Determine who the logged in user is
-        headers = {
-            "Accept": "application/json",
-            "User-Agent": "JupyterHub",
-            "Authorization": "token {}".format(access_token)
-        }
-        req = HTTPRequest("https://api.github.com/user",
-                          method="GET",
-                          headers=headers
-                          )
-        resp = yield http_client.fetch(req)
-        resp_json = json.loads(resp.body.decode('utf8', 'replace'))
-
-        username = resp_json["login"]
-        if self.whitelist and username not in self.whitelist:
-            username = None
-        raise gen.Return(username)
-
-
-class LocalGitHubOAuthenticator(LocalAuthenticator, GitHubOAuthenticator):
-    """A version that mixes in local system user creation"""
-    pass
