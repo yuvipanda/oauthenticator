@@ -1,7 +1,7 @@
 """
-Custom Authenticator to use GitHub OAuth with JupyterHub
+Custom Authenticator to use MediaWiki OAuth with JupyterHub
 
-Most of the code c/o Kyle Kelley (@rgbkrk)
+Derivative of the GitHub OAuth authenticator
 """
 
 
