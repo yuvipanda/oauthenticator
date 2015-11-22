@@ -2,7 +2,7 @@
 
 MediaWiki OAuth + JuptyerHub Authenticator = MWOAuthenticator
 
-Based off of (GitHubOAuthenticator](https://github.com/jupyter/oauthenticator)
+Based off of [GitHubOAuthenticator](https://github.com/jupyter/oauthenticator)
 
 ## Installation
 
