@@ -17,7 +17,7 @@ from jupyterhub import orm
 from mwoauth import ConsumerToken, Handshaker
 from mwoauth.tokens import RequestToken
 
-from traitlets import Unicode
+from traitlets import Unicode, Bool
 
 from oauthenticator import OAuthenticator
 
@@ -97,6 +97,10 @@ class MWOAuthHandler(BaseHandler):
             user = self.find_user(username)
             if user is None:
                 user = orm.User(name=username, id=identity['sub'])
+                if user.state is None:
+                    user.state = {}
+                user.state['ACCESS_KEY'] = access_token.key.decode('utf-8')
+                user.state['ACCESS_SECRET'] = access_token.secret.decode('utf-8')
                 self.db.add(user)
                 self.db.commit()
             self.set_login_cookie(user)
@@ -115,6 +119,23 @@ class MWOAuthenticator(OAuthenticator):
         config=True,
         help='Full path to index.php of the MW instance to use to log in'
     )
+
+    pass_secrets = Bool(
+        False,
+        config=True,
+        help='Pass OAuth consumer and access secrets to the spawner'
+    )
+
+    def pre_spawn_start(self, user, spawner):
+        if not self.pass_secrets:
+            return
+
+        spawner.env.update({
+            'CLIENT_SECRET': self.client_secret,
+            'CLIENT_ID': self.client_id,
+            'ACCESS_KEY': user.state['ACCESS_KEY'],
+            'ACCESS_SECRET': user.state['ACCESS_SECRET'],
+        })
 
     def get_handlers(self, app):
         return [
